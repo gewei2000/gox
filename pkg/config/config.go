@@ -1,27 +1,35 @@
-package main
+package config
 
 import (
-	"flag"
 	"fmt"
+	"github.com/spf13/pflag"
 	"strings"
 )
 
-// PlatformFlag is a flag.Value (and flag.Getter) implementation that
-// is used to track the os/arch flags on the command-line.
+type Config struct {
+	BuildToolchain bool
+	Ldflags        string
+	Asmflags       string
+	Gcflags        string
+	Output         string
+	Parallel       int
+	Tags           string
+	Cgo            bool
+	Rebuild        bool
+	Race           bool
+	GoCmd          string
+	ModMode        string
+	PlatformFlag   PlatformFlag
+}
+
 type PlatformFlag struct {
 	OS     []string
 	Arch   []string
 	OSArch []Platform
+	All    bool
 }
 
-// Platforms returns the list of platforms that were set by this flag.
-// The default set of platforms must be passed in.
 func (p *PlatformFlag) Platforms(supported []Platform) []Platform {
-	// NOTE: Reading this method alone is a bit hard to understand. It
-	// is much easier to understand this method if you pair this with the
-	// table of test cases it has.
-
-	// Build a list of OS and archs NOT to build
 	ignoreArch := make(map[string]struct{})
 	includeArch := make(map[string]struct{})
 	ignoreOS := make(map[string]struct{})
@@ -127,7 +135,7 @@ func (p *PlatformFlag) Platforms(supported []Platform) []Platform {
 	if prefilter == nil {
 		prefilter = make([]Platform, 0, len(supported))
 		for _, v := range supported {
-			if v.Default {
+			if v.Default || p.All {
 				add := v
 				add.Default = false
 				prefilter = append(prefilter, add)
@@ -182,27 +190,13 @@ func (p *PlatformFlag) Platforms(supported []Platform) []Platform {
 	return result
 }
 
-// ArchFlagValue returns a flag.Value that can be used with the flag
-// package to collect the arches for the flag.
-func (p *PlatformFlag) ArchFlagValue() flag.Value {
-	return (*appendStringValue)(&p.Arch)
-}
-
-// OSFlagValue returns a flag.Value that can be used with the flag
-// package to collect the operating systems for the flag.
-func (p *PlatformFlag) OSFlagValue() flag.Value {
-	return (*appendStringValue)(&p.OS)
-}
-
-// OSArchFlagValue returns a flag.Value that can be used with the flag
-// package to collect complete os and arch pairs for the flag.
-func (p *PlatformFlag) OSArchFlagValue() flag.Value {
+func (p *PlatformFlag) OSArchFlagValue() pflag.Value {
 	return (*appendPlatformValue)(&p.OSArch)
 }
 
 // appendPlatformValue is a flag.Value that appends a full platform (os/arch)
 // to a list where the values from space-separated lines. This is used to
-// satisfy the -osarch flag.
+// satisfy the --osarch flag.
 type appendPlatformValue []Platform
 
 func (s *appendPlatformValue) String() string {
@@ -217,8 +211,7 @@ func (s *appendPlatformValue) Set(value string) error {
 	for _, v := range strings.Split(value, " ") {
 		parts := strings.Split(v, "/")
 		if len(parts) != 2 {
-			return fmt.Errorf(
-				"Invalid platform syntax: %s should be os/arch", v)
+			return fmt.Errorf("invalid platform syntax: %s should be os/arch", v)
 		}
 
 		platform := Platform{
@@ -232,6 +225,10 @@ func (s *appendPlatformValue) Set(value string) error {
 	return nil
 }
 
+func (s *appendPlatformValue) Type() string {
+	return "osArchValue"
+}
+
 func (s *appendPlatformValue) appendIfMissing(value *Platform) {
 	for _, existing := range *s {
 		if existing == *value {
@@ -240,33 +237,4 @@ func (s *appendPlatformValue) appendIfMissing(value *Platform) {
 	}
 
 	*s = append(*s, *value)
-}
-
-// appendStringValue is a flag.Value that appends values to the list,
-// where the values come from space-separated lines. This is used to
-// satisfy the -os="windows linux" flag to become []string{"windows", "linux"}
-type appendStringValue []string
-
-func (s *appendStringValue) String() string {
-	return strings.Join(*s, " ")
-}
-
-func (s *appendStringValue) Set(value string) error {
-	for _, v := range strings.Split(value, " ") {
-		if v != "" {
-			s.appendIfMissing(strings.ToLower(v))
-		}
-	}
-
-	return nil
-}
-
-func (s *appendStringValue) appendIfMissing(value string) {
-	for _, existing := range *s {
-		if existing == value {
-			return
-		}
-	}
-
-	*s = append(*s, value)
 }

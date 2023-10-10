@@ -1,23 +1,17 @@
-package main
+package config
 
 import (
 	"fmt"
 	"log"
+	"runtime"
 	"strings"
 
 	version "github.com/hashicorp/go-version"
 )
 
-// Platform is a combination of OS/arch that can be built against.
 type Platform struct {
-	OS   string
-	Arch string
-
-	// Default, if true, will be included as a default build target
-	// if no OS/arch is specified. We try to only set as a default popular
-	// targets or targets that are generally useful. For example, Android
-	// is not a default because it is quite rare that you're cross-compiling
-	// something to Android AND something like Linux.
+	OS      string
+	Arch    string
 	Default bool
 }
 
@@ -178,12 +172,23 @@ var (
 	// no new platforms in 1.18
 	Platforms_1_18 = Platforms_1_17
 
-	PlatformsLatest = Platforms_1_18
+	Platforms_1_19 = addDrop(Platforms_1_18, []Platform{
+		{"linux", "loong64", true},
+	}, nil)
+
+	Platforms_1_20 = addDrop(Platforms_1_19, []Platform{
+		{"freebsd", "riscv64", true},
+	}, nil)
+
+	Platforms_1_21 = addDrop(Platforms_1_20, []Platform{
+		{"wasip1", "wasm", true},
+	}, nil)
+
+	PlatformsLatest = Platforms_1_21
 )
 
-// SupportedPlatforms returns the full list of supported platforms for
-// the version of Go that is
-func SupportedPlatforms(v string) []Platform {
+func SupportedPlatforms() []Platform {
+	v := runtime.Version()
 	// Use latest if we get an unexpected version string
 	if !strings.HasPrefix(v, "go") {
 		return PlatformsLatest
@@ -221,6 +226,8 @@ func SupportedPlatforms(v string) []Platform {
 		{">= 1.16, < 1.17", Platforms_1_16},
 		{">= 1.17, < 1.18", Platforms_1_17},
 		{">= 1.18, < 1.19", Platforms_1_18},
+		{">= 1.19, < 1.20", Platforms_1_19},
+		{">= 1.20, < 1.21", Platforms_1_20},
 	}
 
 	for _, p := range platforms {

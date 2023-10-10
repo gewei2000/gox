@@ -10,7 +10,7 @@ To install Gox, please use `go get`. We tag versions so feel free to
 checkout that tag and compile.
 
 ```
-$ go install github.com/mitchellh/gox@latest
+$ make install
 ...
 $ gox -h
 ...
@@ -62,14 +62,14 @@ $ gox github.com/mitchellh/gox github.com/hashicorp/serf
 Or if you want to just build for linux:
 
 ```
-$ gox -os="linux"
+$ gox --os="linux"
 ...
 ```
 
 Or maybe you just want to build for 64-bit linux:
 
 ```
-$ gox -osarch="linux/amd64"
+$ gox --osarch="linux/amd64"
 ...
 ```
 

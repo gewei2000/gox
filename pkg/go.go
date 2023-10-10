@@ -1,9 +1,9 @@
-package main
+package pkg
 
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"github.com/mitchellh/gox/pkg/config"
 	"log"
 	"os"
 	"os/exec"
@@ -20,56 +20,38 @@ type OutputTemplateData struct {
 	Arch string
 }
 
-type CompileOpts struct {
-	PackagePath string
-	Platform    Platform
-	OutputTpl   string
-	Ldflags     string
-	Gcflags     string
-	Asmflags    string
-	Tags        string
-	ModMode     string
-	Cgo         bool
-	Rebuild     bool
-	GoCmd       string
-	Race        bool
-}
-
-// GoCrossCompile
-func GoCrossCompile(opts *CompileOpts) error {
-	env := append(os.Environ(),
-		"GOOS="+opts.Platform.OS,
-		"GOARCH="+opts.Platform.Arch)
+func GoCrossCompile(cfg *config.Config, platform config.Platform, packagePath string) error {
+	env := append(os.Environ(), "GOOS="+platform.OS, "GOARCH="+platform.Arch)
 
 	// If we're building for our own platform, then enable cgo always. We
 	// respect the CGO_ENABLED flag if that is explicitly set on the platform.
-	if !opts.Cgo && os.Getenv("CGO_ENABLED") != "0" {
-		opts.Cgo = runtime.GOOS == opts.Platform.OS &&
-			runtime.GOARCH == opts.Platform.Arch
+	cgo := cfg.Cgo
+	if !cfg.Cgo && os.Getenv("CGO_ENABLED") != "0" {
+		cgo = runtime.GOOS == platform.OS && runtime.GOARCH == platform.Arch
 	}
 
 	// If cgo is enabled then set that env var
-	if opts.Cgo {
+	if cgo {
 		env = append(env, "CGO_ENABLED=1")
 	} else {
 		env = append(env, "CGO_ENABLED=0")
 	}
 
 	var outputPath bytes.Buffer
-	tpl, err := template.New("output").Parse(opts.OutputTpl)
+	tpl, err := template.New("output").Parse(cfg.Output)
 	if err != nil {
 		return err
 	}
 	tplData := OutputTemplateData{
-		Dir:  filepath.Base(opts.PackagePath),
-		OS:   opts.Platform.OS,
-		Arch: opts.Platform.Arch,
+		Dir:  filepath.Base(packagePath),
+		OS:   platform.OS,
+		Arch: platform.Arch,
 	}
 	if err := tpl.Execute(&outputPath, &tplData); err != nil {
 		return err
 	}
 
-	if opts.Platform.OS == "windows" {
+	if platform.OS == "windows" {
 		outputPath.WriteString(".exe")
 	}
 
@@ -85,45 +67,37 @@ func GoCrossCompile(opts *CompileOpts) error {
 	// the GOPATH.For this, we just drop it since we move to that
 	// directory to build.
 	chdir := ""
-	if opts.PackagePath[0] == '_' {
+	if packagePath[0] == '_' {
 		if runtime.GOOS == "windows" {
-			// We have to replace weird paths like this:
-			//
-			//   _/c_/Users
-			//
-			// With:
-			//
-			//   c:\Users
-			//
 			re := regexp.MustCompile("^/([a-zA-Z])_/")
-			chdir = re.ReplaceAllString(opts.PackagePath[1:], "$1:\\")
+			chdir = re.ReplaceAllString(packagePath[1:], "$1:\\")
 			chdir = strings.Replace(chdir, "/", "\\", -1)
 		} else {
-			chdir = opts.PackagePath[1:]
+			chdir = packagePath[1:]
 		}
 
-		opts.PackagePath = ""
+		packagePath = ""
 	}
 
 	args := []string{"build"}
-	if opts.Rebuild {
+	if cfg.Rebuild {
 		args = append(args, "-a")
 	}
-	if opts.ModMode != "" {
-		args = append(args, "-mod", opts.ModMode)
+	if cfg.ModMode != "" {
+		args = append(args, "-mod", cfg.ModMode)
 	}
-	if opts.Race {
+	if cfg.Race {
 		args = append(args, "-race")
 	}
 	args = append(args,
-		"-gcflags", opts.Gcflags,
-		"-ldflags", opts.Ldflags,
-		"-asmflags", opts.Asmflags,
-		"-tags", opts.Tags,
+		"-gcflags", cfg.Gcflags,
+		"-ldflags", cfg.Ldflags,
+		"-asmflags", cfg.Asmflags,
+		"-tags", cfg.Tags,
 		"-o", outputPathReal,
-		opts.PackagePath)
+		packagePath)
 
-	_, err = execGo(opts.GoCmd, env, chdir, args...)
+	_, err = execGo(cfg.GoCmd, env, chdir, args...)
 	return err
 }
 
@@ -170,38 +144,12 @@ func GoRoot() (string, error) {
 	return strings.TrimSpace(output), nil
 }
 
-// GoVersion reads the version of `go` that is on the PATH. This is done
-// instead of `runtime.Version()` because it is possible to run gox against
-// another Go version.
-func GoVersion() (string, error) {
-	// NOTE: We use `go run` instead of `go version` because the output
-	// of `go version` might change whereas the source is guaranteed to run
-	// for some time thanks to Go's compatibility guarantee.
-
-	td, err := ioutil.TempDir("", "gox")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(td)
-
-	// Write the source code for the program that will generate the version
-	sourcePath := filepath.Join(td, "version.go")
-	if err := ioutil.WriteFile(sourcePath, []byte(versionSource), 0644); err != nil {
-		return "", err
-	}
-
-	// Execute and read the version, which will be the only thing on stdout.
-	return execGo("go", nil, "", "run", sourcePath)
+func GoVersion() string {
+	return runtime.Version()
 }
 
-// GoVersionParts parses the version numbers from the version itself
-// into major and minor: 1.5, 1.4, etc.
 func GoVersionParts() (result [2]int, err error) {
-	version, err := GoVersion()
-	if err != nil {
-		return
-	}
-
+	version := GoVersion()
 	_, err = fmt.Sscanf(version, "go%d.%d", &result[0], &result[1])
 	return
 }
@@ -224,14 +172,3 @@ func execGo(GoCmd string, env []string, dir string, args ...string) (string, err
 
 	return stdout.String(), nil
 }
-
-const versionSource = `package main
-
-import (
-	"fmt"
-	"runtime"
-)
-
-func main() {
-	fmt.Print(runtime.Version())
-}`

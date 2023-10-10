@@ -1,20 +1,17 @@
-package main
+package pkg
 
 import (
 	"bytes"
 	"fmt"
-	"io"
+	"github.com/mitchellh/gox/pkg/config"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
-
-	"github.com/mitchellh/iochan"
 )
 
-// The "main" method for when the toolchain build is requested.
-func mainBuildToolchain(parallel int, platformFlag PlatformFlag, verbose bool) int {
+func BuildToolchain(cfg *config.Config, platformFlag config.PlatformFlag) int {
 	if _, err := exec.LookPath("go"); err != nil {
 		fmt.Fprintf(os.Stderr, "You must have Go already built for your native platform\n")
 		fmt.Fprintf(os.Stderr, "and the `go` binary on the PATH to build toolchains.\n")
@@ -28,16 +25,7 @@ func mainBuildToolchain(parallel int, platformFlag PlatformFlag, verbose bool) i
 		return 1
 	}
 	if versionParts[0] >= 1 && versionParts[1] >= 5 {
-		fmt.Fprintf(
-			os.Stderr,
-			"-build-toolchain is no longer required for Go 1.5 or later.\n"+
-				"You can start using Gox immediately!\n")
-		return 1
-	}
-
-	version, err := GoVersion()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error reading Go version: %s", err)
+		fmt.Fprintf(os.Stderr, "--build-toolchain is no longer required for Go 1.5 or later.\nYou can start using Gox immediately!\n")
 		return 1
 	}
 
@@ -47,30 +35,25 @@ func mainBuildToolchain(parallel int, platformFlag PlatformFlag, verbose bool) i
 		return 1
 	}
 
-	if verbose {
-		fmt.Println("Verbose mode enabled. Output from building each toolchain will be")
-		fmt.Println("outputted to stdout as they are built.\n ")
-	}
-
 	// Determine the platforms we're building the toolchain for.
-	platforms := platformFlag.Platforms(SupportedPlatforms(version))
+	platforms := platformFlag.Platforms(config.SupportedPlatforms())
 
 	// The toolchain build can't be parallelized.
-	if parallel > 1 {
+	if cfg.Parallel > 1 {
 		fmt.Println("The toolchain build can't be parallelized because compiling a single")
 		fmt.Println("Go source directory can only be done for one platform at a time. Therefore,")
 		fmt.Println("the toolchain for each platform will be built one at a time.\n ")
 	}
-	parallel = 1
+	cfg.Parallel = 1
 
 	var errorLock sync.Mutex
 	var wg sync.WaitGroup
 	errs := make([]error, 0)
-	semaphore := make(chan int, parallel)
+	semaphore := make(chan int, cfg.Parallel)
 	for _, platform := range platforms {
 		wg.Add(1)
-		go func(platform Platform) {
-			err := buildToolchain(&wg, semaphore, root, platform, verbose)
+		go func(platform config.Platform) {
+			err := buildToolchain(&wg, semaphore, root, platform)
 			if err != nil {
 				errorLock.Lock()
 				defer errorLock.Unlock()
@@ -91,7 +74,7 @@ func mainBuildToolchain(parallel int, platformFlag PlatformFlag, verbose bool) i
 	return 0
 }
 
-func buildToolchain(wg *sync.WaitGroup, semaphore chan int, root string, platform Platform, verbose bool) error {
+func buildToolchain(wg *sync.WaitGroup, semaphore chan int, root string, platform config.Platform) error {
 	defer wg.Done()
 	semaphore <- 1
 	defer func() { <-semaphore }()
@@ -114,33 +97,12 @@ func buildToolchain(wg *sync.WaitGroup, semaphore chan int, root string, platfor
 	cmd.Stderr = &stderr
 	cmd.Stdout = &stdout
 
-	if verbose {
-		// In verbose mode, we output all stdout to the console.
-		r, w := io.Pipe()
-		cmd.Stdout = w
-		cmd.Stderr = io.MultiWriter(cmd.Stderr, w)
-
-		// Send all the output to stdout, and also make a done channel
-		// so that this compilation isn't done until we receive all output
-		doneCh := make(chan struct{})
-		go func() {
-			defer close(doneCh)
-			for line := range iochan.DelimReader(r, '\n') {
-				fmt.Printf("%s: %s", platform.String(), line)
-			}
-		}()
-		defer func() {
-			w.Close()
-			<-doneCh
-		}()
-	}
-
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("Error building '%s': %s", platform.String(), err)
+		return fmt.Errorf("error building '%s': %s", platform.String(), err)
 	}
 
 	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("Error building '%s'.\n\nStdout: %s\n\nStderr: %s\n",
+		return fmt.Errorf("error building '%s'.\n\nStdout: %s\n\nStderr: %s\n",
 			platform.String(), stdout.String(), stderr.String())
 	}
 
